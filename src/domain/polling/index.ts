@@ -4,26 +4,28 @@ import {
   OrderKind,
   computeOrderUid,
 } from "@cowprotocol/contracts";
-
-import { ethers } from "ethers";
-import { BytesLike } from "ethers/lib/utils";
-
 import {
-  ConditionalOrder as ConditionalOrderSDK,
   OrderBookApi,
   OrderCreation,
   OrderPostError,
+  SigningScheme,
+  SupportedChainId,
+} from "@cowprotocol/cow-sdk";
+import {
+  ConditionalOrder as ConditionalOrderSDK,
   PollParams,
   PollResult,
   PollResultCode,
   PollResultErrors,
   PollResultSuccess,
-  SigningScheme,
-  SupportedChainId,
   formatEpoch,
-} from "@cowprotocol/cow-sdk";
+} from "@cowprotocol/sdk-composable";
+import { ethers } from "ethers";
+import { BytesLike } from "ethers/lib/utils";
+
 import { ChainContext } from "../../services";
 import { ConditionalOrder, OrderStatus } from "../../types";
+
 import {
   LoggerWithMethods,
   formatStatus,
@@ -410,9 +412,10 @@ async function processConditionalOrder(
 
     const orderToSubmit: Order = {
       ...order,
-      kind: kindToString(order.kind.toString()),
-      sellTokenBalance: balanceToString(order.sellTokenBalance.toString()),
-      buyTokenBalance: balanceToString(order.buyTokenBalance.toString()),
+      appData: order.appData as string,
+      kind: kindToString(order.kind as string),
+      sellTokenBalance: balanceToString(order.sellTokenBalance as string),
+      buyTokenBalance: balanceToString(order.buyTokenBalance as string),
       validTo: Number(order.validTo),
     };
 
