@@ -137,6 +137,194 @@ const dumpRoute = (router: Router) => {
   });
 };
 
+const ordersRoute = (router: Router) => {
+  /**
+   * Get conditional orders filtered by handler address
+   * GET /api/orders/:chainId?handler=0x...
+   */
+  router.get(
+    "/orders/:chainId",
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const { chainId } = req.params;
+        const { handler } = req.query;
+
+        // Load the registry for the chain
+        const chainContext = ApiService.getInstance()
+          .getChainContexts()
+          .find((ctx) => ctx.chainId.toString() === chainId);
+
+        if (!chainContext) {
+          res.status(404).json({
+            error: `Chain ${chainId} not found`,
+          });
+          return;
+        }
+
+        const registry = chainContext.registry;
+        const ownerOrders = registry.ownerOrders;
+
+        // Debug: Collect all unique handlers found and filter orders
+        const allHandlers = new Set<string>();
+        let totalOrdersInRegistry = 0;
+        const filteredOrders: Array<{
+          owner: string;
+          conditionalOrder: {
+            id: string;
+            tx: string;
+            params: {
+              handler: string;
+              salt: string;
+              staticInput: string;
+            };
+            proof: any;
+            composableCow: string;
+            orders: Array<{ orderUid: string; status: string }>;
+            pollResult?: {
+              lastExecutionTimestamp: number;
+              blockNumber: number;
+              result: any;
+            };
+          };
+        }> = [];
+
+        const handlerFilter = handler
+          ? (handler as string).toLowerCase()
+          : null;
+
+        for (const [owner, conditionalOrders] of ownerOrders.entries()) {
+          totalOrdersInRegistry += conditionalOrders.size;
+          for (const conditionalOrder of conditionalOrders) {
+            const orderHandler = conditionalOrder.params.handler.toLowerCase();
+            allHandlers.add(orderHandler);
+
+            // Filter by handler if provided
+            if (handlerFilter && orderHandler !== handlerFilter) {
+              continue;
+            }
+
+            // Convert Map to Array for JSON serialization
+            const ordersArray = Array.from(
+              conditionalOrder.orders.entries()
+            ).map(([orderUid, status]) => ({
+              orderUid:
+                typeof orderUid === "string" ? orderUid : orderUid.toString(),
+              status:
+                status === 1
+                  ? "SUBMITTED"
+                  : status === 2
+                  ? "FILLED"
+                  : "UNKNOWN",
+            }));
+
+            filteredOrders.push({
+              owner,
+              conditionalOrder: {
+                id: conditionalOrder.id,
+                tx: conditionalOrder.tx,
+                params: conditionalOrder.params,
+                proof: conditionalOrder.proof,
+                composableCow: conditionalOrder.composableCow,
+                orders: ordersArray,
+                pollResult: conditionalOrder.pollResult,
+              },
+            });
+          }
+        }
+
+        res.setHeader("Content-Type", "application/json");
+        res.json({
+          chainId,
+          totalOrders: filteredOrders.length,
+          totalOrdersInRegistry,
+          allHandlersFound: Array.from(allHandlers),
+          requestedHandler: handler ? (handler as string).toLowerCase() : null,
+          lastProcessedBlock: registry.lastProcessedBlock,
+          orders: filteredOrders,
+        });
+        return;
+      } catch (err: any) {
+        res.status(500).json({
+          error: err.message || "Internal server error",
+        });
+        return;
+      }
+    }
+  );
+
+  /**
+   * Get a specific conditional order by ID
+   * GET /api/orders/:chainId/:orderId
+   */
+  router.get(
+    "/orders/:chainId/:orderId",
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const { chainId, orderId } = req.params;
+
+        const chainContext = ApiService.getInstance()
+          .getChainContexts()
+          .find((ctx) => ctx.chainId.toString() === chainId);
+
+        if (!chainContext) {
+          res.status(404).json({
+            error: `Chain ${chainId} not found`,
+          });
+          return;
+        }
+
+        const registry = chainContext.registry;
+        const ownerOrders = registry.ownerOrders;
+
+        // Find the order by ID
+        for (const [owner, conditionalOrders] of ownerOrders.entries()) {
+          for (const conditionalOrder of conditionalOrders) {
+            if (conditionalOrder.id.toLowerCase() === orderId.toLowerCase()) {
+              const ordersArray = Array.from(
+                conditionalOrder.orders.entries()
+              ).map(([orderUid, status]) => ({
+                orderUid:
+                  typeof orderUid === "string" ? orderUid : orderUid.toString(),
+                status:
+                  status === 1
+                    ? "SUBMITTED"
+                    : status === 2
+                    ? "FILLED"
+                    : "UNKNOWN",
+              }));
+
+              res.json({
+                chainId,
+                owner,
+                conditionalOrder: {
+                  id: conditionalOrder.id,
+                  tx: conditionalOrder.tx,
+                  params: conditionalOrder.params,
+                  proof: conditionalOrder.proof,
+                  composableCow: conditionalOrder.composableCow,
+                  orders: ordersArray,
+                  pollResult: conditionalOrder.pollResult,
+                },
+              });
+              return;
+            }
+          }
+        }
+
+        res.status(404).json({
+          error: `Conditional order ${orderId} not found`,
+        });
+        return;
+      } catch (err: any) {
+        res.status(500).json({
+          error: err.message || "Internal server error",
+        });
+        return;
+      }
+    }
+  );
+};
+
 const aboutRoute = (router: Router) => {
   router.get("/version", async (req: Request, res: Response) => {
     res.setHeader("Content-Type", "application/json");
@@ -150,7 +338,11 @@ const aboutRoute = (router: Router) => {
 };
 
 export type RouterInitializer = (router: Router) => void;
-const routeInitializers: RouterInitializer[] = [aboutRoute, dumpRoute];
+const routeInitializers: RouterInitializer[] = [
+  aboutRoute,
+  dumpRoute,
+  ordersRoute,
+];
 
 const router = Router();
 for (const routeInitialize of routeInitializers) {

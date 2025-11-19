@@ -49,14 +49,76 @@ For [DAppNode](https://dappnode.com), the watch-tower is available as a package.
 - `node` (`>= v16.18.0`)
 - `yarn`
 
+#### Setup
+
+1. **Copy the environment example file:**
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Edit `.env` with your configuration:**
+   ```bash
+   # Networks to monitor (comma-separated list, e.g., "base,mainnet,arbitrum")
+   # Defaults to "base" if not specified
+   NETWORKS=base
+   
+   # Base Network Configuration
+   BASE_RPC_URL=https://rpc.base.org
+   BASE_DEPLOYMENT_BLOCK=31084679
+   BASE_HANDLER_ADDRESS=0xYourHandlerAddressHere
+   BASE_BLOCK_POLLING_RATE=60  # Optional: process every N blocks when using block-by-block mode (default: 1)
+   BASE_POLLING_INTERVAL_SECONDS=300  # Optional: time-based polling every N seconds (e.g., 300 = 5 minutes). If set, uses time-based polling instead of block-by-block.
+   BASE_KEEP_EXPIRED_ORDERS=true  # Optional: keep expired orders in registry (default: true)
+   
+   # To add more networks, add NETWORKS=base,mainnet and configure:
+   # MAINNET_RPC_URL=https://eth.llamarpc.com
+   # MAINNET_DEPLOYMENT_BLOCK=12345678
+   # MAINNET_HANDLER_ADDRESS=0xYourHandlerAddressHere
+   # MAINNET_BLOCK_POLLING_RATE=1
+   # MAINNET_POLLING_INTERVAL_SECONDS=300
+   
+   # Storage Configuration (optional)
+   # Options: "leveldb" or "redis" (default: "leveldb")
+   STORAGE_TYPE=redis
+   REDIS_HOST=localhost
+   REDIS_PORT=6379
+   REDIS_PASSWORD=
+   ```
+
+3. **Generate `config.json` from environment variables:**
+   ```bash
+   yarn generate-config
+   ```
+
+   This will create a `config.json` file with your network configuration(s), filtering only orders from your specified handler address(es).
+   
+   **Environment Variable Pattern:**
+   - `NETWORKS`: Comma-separated list of network names (e.g., `"base,mainnet"`)
+   - For each network `{NETWORK}`:
+     - `{NETWORK}_RPC_URL` (required): RPC endpoint URL
+     - `{NETWORK}_DEPLOYMENT_BLOCK` (required): Block number where ComposableCoW was deployed
+     - `{NETWORK}_HANDLER_ADDRESS` (required): Handler address to filter orders
+     - `{NETWORK}_BLOCK_POLLING_RATE` (optional): Process every N blocks when using block-by-block mode (default: 1)
+     - `{NETWORK}_POLLING_INTERVAL_SECONDS` (optional): Time-based polling interval in seconds. If set, the watch-tower will poll for new blocks at this interval instead of listening to every block. Useful for handlers that don't require immediate updates (e.g., Dutch auctions updating every 10 minutes). If not set, uses block-by-block polling.
+     - `{NETWORK}_KEEP_EXPIRED_ORDERS` (optional): Keep expired orders (default: true)
+
 #### CLI
 
 ```bash
 # Install dependencies
 yarn
+
+# Option 1: Use the start command (generates config and runs automatically)
+yarn start
+
+# Option 2: Manual steps
+# Generate config.json from .env
+yarn generate-config
 # Run watch-tower
 yarn cli run --config-path ./config.json
 ```
+
+**Note**: The `yarn start` command will automatically generate `config.json` from your `.env` file before starting the watch-tower. If Redis configuration is not set in your `.env`, it will default to `localhost:6379`.
 
 ## Architecture
 
@@ -83,12 +145,24 @@ As orders expire, or are cancelled, they are removed from the registry to conser
 
 #### Database
 
-The chosen architecture for the storage is a NoSQL (key-value) store. The watch-tower uses the following:
+The chosen architecture for the storage is a NoSQL (key-value) store. The watch-tower supports two storage backends:
 
-- [`level`](https://www.npmjs.com/package/level)
+**LevelDB** (default):
+- Uses [`level`](https://www.npmjs.com/package/level) package
 - Default location: `$PWD/database`
+- Provides [ACID](https://en.wikipedia.org/wiki/ACID) guarantees
+- Simple key-value store, ideal for local deployments
+- All writes are batched, and if a write fails, the watch-tower will throw an error and exit
 
-`LevelDB` is chosen it it provides [ACID](https://en.wikipedia.org/wiki/ACID) guarantees, and is a simple key-value store. The watch-tower uses the `level` package to provide a simple interface to the database. All writes are batched, and if a write fails, the watch-tower will throw an error and exit. On restarting, the watch-tower will attempt to re-process from the last block that was successfully indexed, resulting in the database becoming eventually consistent with the blockchain.
+**Redis** (optional):
+- Uses [`ioredis`](https://www.npmjs.com/package/ioredis) package
+- Configured via `STORAGE_TYPE=redis` in `.env`
+- Requires Redis host, port, and optionally password
+- All keys are prefixed with `cryptoswap:watch-tower:` for namespacing
+- Ideal for shared deployments or when integrating with existing Redis infrastructure
+- Defaults to `localhost:6379` if not configured
+
+On restarting, the watch-tower will attempt to re-process from the last block that was successfully indexed, resulting in the database becoming eventually consistent with the blockchain.
 
 ##### Schema
 

@@ -108,7 +108,7 @@ export async function checkForAndPlaceOrder(
   blockNumberOverride?: number,
   blockTimestampOverride?: number
 ) {
-  const { chainId, registry, filterPolicy } = context;
+  const { chainId, registry, filterPolicy, keepExpiredOrders } = context;
   const { ownerOrders, numOrders, numOwners } = registry;
 
   const blockNumber = blockNumberOverride || block.number;
@@ -217,6 +217,19 @@ export async function checkForAndPlaceOrder(
         continue;
       }
 
+      // If keepExpiredOrders is enabled and the order already returned DONT_TRY_AGAIN,
+      // skip polling it but keep it in the registry
+      if (
+        keepExpiredOrders &&
+        lastHint?.result === PollResultCode.DONT_TRY_AGAIN
+      ) {
+        log.debug(
+          `Skipping conditional order. Reason: Already expired (DONT_TRY_AGAIN), keeping in registry for historical data. ${logOrderDetails}`,
+          conditionalOrder.params
+        );
+        continue;
+      }
+
       // Proceed with the normal check
       log.info(`${logOrderDetails}`, conditionalOrder.params);
 
@@ -231,7 +244,11 @@ export async function checkForAndPlaceOrder(
       );
 
       // Don't try again the same order, in case that's the poll result
-      if (pollResult.result === PollResultCode.DONT_TRY_AGAIN) {
+      // But keep it in the registry if keepExpiredOrders is enabled
+      if (
+        pollResult.result === PollResultCode.DONT_TRY_AGAIN &&
+        !keepExpiredOrders
+      ) {
         ordersPendingDelete.push(conditionalOrder);
       }
 

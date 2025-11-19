@@ -8,6 +8,14 @@
 export type FilterAction = "ACCEPT" | "DROP" | "SKIP";
 
 export interface Config {
+  storage?: {
+    type: "leveldb" | "redis";
+    redis?: {
+      host: string;
+      port?: number;
+      password?: string;
+    };
+  };
   networks: {
     name: string;
     rpc: string;

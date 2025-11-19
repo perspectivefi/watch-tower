@@ -17,9 +17,14 @@ export type WatchtowerOptions = LogOptions & {
 
 export type RunOptions = WatchtowerOptions & {
   networks: Config["networks"];
+  storage?: Config["storage"];
 };
 
-export type ContextOptions = WatchtowerOptions & Config["networks"][number];
+export type ContextOptions = WatchtowerOptions &
+  Config["networks"][number] & {
+    keepExpiredOrders?: boolean;
+    pollingIntervalSeconds?: number;
+  };
 
 export type DumpDbOptions = LogOptions & {
   chainId: number;

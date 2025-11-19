@@ -16,7 +16,9 @@
     "typechain": "typechain --target ethers-v5 --out-dir src/types/generated/ \"abi/*.json\"",
     "configschema": "node ./src/types/build.js",
     "prepare": "husky install && yarn typechain && yarn configschema",
-    "cli": "ts-node src/index.ts"
+    "cli": "ts-node src/index.ts",
+    "generate-config": "ts-node scripts/generate-config.ts",
+    "start": "yarn generate-config && yarn cli run --config-path ./config.json"
   },
   "devDependencies": {
     "@commitlint/cli": "^17.6.7",
@@ -62,6 +64,7 @@
     "node-fetch": "2",
     "node-slack": "^0.0.7",
     "prom-client": "^14.2.0",
+    "ioredis": "^5.3.2",
     "ts-node": "^10.9.1",
     "typescript": "^5.0.4"
   },

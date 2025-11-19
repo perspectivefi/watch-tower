@@ -175,7 +175,9 @@ export class Registry {
       .get(getNetworkStorageKey(LAST_PROCESSED_BLOCK_STORAGE_KEY, network))
       .then(
         (block: string): RegistryBlock =>
-          block ? JSON.parse(block) : { number: genesisBlockNumber - 1 }
+          block
+            ? JSON.parse(block)
+            : { number: genesisBlockNumber - 1, timestamp: 0, hash: "" }
       )
       .catch(() => null);
 

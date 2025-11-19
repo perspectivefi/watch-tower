@@ -2,6 +2,34 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "properties": {
+    "storage": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["leveldb", "redis"],
+          "default": "leveldb"
+        },
+        "redis": {
+          "type": "object",
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "password": {
+              "type": "string"
+            }
+          },
+          "required": ["host"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    },
     "networks": {
       "type": "array",
       "items": {
@@ -32,6 +60,17 @@
           },
           "pageSize": {
             "type": "integer"
+          },
+          "keepExpiredOrders": {
+            "type": "boolean",
+            "description": "If true, keep expired orders in the registry instead of deleting them. Useful when filtering by handler to maintain historical data.",
+            "default": false
+          },
+          "pollingIntervalSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Time-based polling interval in seconds. If set, the watch-tower will poll for new blocks at this interval instead of listening to every block. Useful for handlers that don't require immediate updates (e.g., Dutch auctions updating every 10 minutes). Default: null (poll every block).",
+            "default": null
           },
           "filterPolicy": {
             "type": "object",

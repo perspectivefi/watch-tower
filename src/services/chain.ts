@@ -79,6 +79,8 @@ export class ChainContext {
   readonly watchdogTimeout: number;
   readonly addresses?: string[];
   readonly processEveryNumBlocks: number;
+  readonly keepExpiredOrders: boolean;
+  readonly pollingIntervalSeconds?: number;
 
   private sync: ChainSync;
   static chains: Chains = {};
@@ -105,6 +107,8 @@ export class ChainContext {
       owners,
       orderBookApi: orderBookApiUrl,
       filterPolicy,
+      keepExpiredOrders,
+      pollingIntervalSeconds,
     } = options;
 
     this.sync = ChainSync.SYNCING;
@@ -114,6 +118,8 @@ export class ChainContext {
     this.processEveryNumBlocks = options.processEveryNumBlocks ?? 1;
     this.watchdogTimeout = watchdogTimeout ?? WATCHDOG_TIMEOUT_DEFAULT_SECS;
     this.addresses = owners;
+    this.keepExpiredOrders = keepExpiredOrders ?? false;
+    this.pollingIntervalSeconds = pollingIntervalSeconds;
 
     this.provider = provider;
     this.chainId = chainId;
@@ -331,13 +337,34 @@ export class ChainContext {
    * 2. Check if any orders want to create discrete orders.
    */
   private async subscribeToNewBlocks(lastProcessedBlock: providers.Block) {
+    const { chainId, pollingIntervalSeconds } = this;
+    const loggerName = "subscribeToNewBlocks";
+    const log = getLogger({ name: loggerName, chainId });
+
+    // Choose polling mode based on configuration
+    if (pollingIntervalSeconds) {
+      log.info(
+        `👀 Start time-based block watcher (polling every ${pollingIntervalSeconds}s)`
+      );
+      return this.subscribeToNewBlocksTimeBased(lastProcessedBlock);
+    } else {
+      log.info(`👀 Start block-by-block watcher`);
+      return this.subscribeToNewBlocksEventBased(lastProcessedBlock);
+    }
+  }
+
+  /**
+   * Block-by-block event-based polling
+   */
+  private async subscribeToNewBlocksEventBased(
+    lastProcessedBlock: providers.Block
+  ) {
     const { provider, registry, chainId, watchdogTimeout } = this;
     const loggerName = "subscribeToNewBlocks";
     let log = getLogger({ name: loggerName, chainId });
-    // Watch for new blocks
-    log.info(`👀 Start block watcher`);
     log.debug(`Watchdog timeout: ${watchdogTimeout} seconds`);
     let lastBlockReceived = lastProcessedBlock;
+
     provider.on("block", async (blockNumber: number) => {
       metrics.blockHeightLatest.labels(chainId.toString()).set(blockNumber);
 
@@ -413,6 +440,180 @@ export class ChainContext {
         }
 
         // We need to handle our own exit here as the process is not running in a kubernetes pod
+        await registry.storage.close();
+        process.exit(1);
+      }
+    }
+  }
+
+  /**
+   * Time-based polling: poll for new blocks at a fixed interval
+   */
+  private async subscribeToNewBlocksTimeBased(
+    lastProcessedBlock: providers.Block
+  ) {
+    const {
+      provider,
+      registry,
+      chainId,
+      watchdogTimeout,
+      pollingIntervalSeconds,
+    } = this;
+    const loggerName = "subscribeToNewBlocks";
+    const log = getLogger({ name: loggerName, chainId });
+
+    // For time-based polling, adjust watchdog timeout to be at least 2x the polling interval
+    // This prevents false alarms when polling less frequently
+    const adjustedWatchdogTimeout = Math.max(
+      watchdogTimeout,
+      pollingIntervalSeconds! * 2 + 60 // At least 2x polling interval + 60s buffer
+    );
+    log.debug(
+      `Watchdog timeout: ${watchdogTimeout}s (adjusted to ${adjustedWatchdogTimeout}s for time-based polling)`
+    );
+
+    let lastProcessedBlockNumber = lastProcessedBlock.number;
+    let lastProcessedBlockHash = lastProcessedBlock.hash;
+    let lastProcessedTimestamp = lastProcessedBlock.timestamp;
+
+    const pollForNewBlocks = async () => {
+      try {
+        const currentBlock = await provider.getBlock("latest");
+        metrics.blockHeightLatest
+          .labels(chainId.toString())
+          .set(currentBlock.number);
+
+        if (currentBlock.number <= lastProcessedBlockNumber) {
+          // No new blocks, check for re-orgs
+          const lastBlock = await provider.getBlock(lastProcessedBlockNumber);
+          if (lastBlock.hash !== lastProcessedBlockHash) {
+            metrics.reorgsTotal.labels(chainId.toString()).inc();
+            log.info(`Re-org detected at block ${lastProcessedBlockNumber}`);
+            // Re-process the affected block
+            const events = await pollContractForEvents(
+              lastProcessedBlockNumber,
+              lastProcessedBlockNumber,
+              this
+            );
+            await processBlockAndPersist({
+              context: this,
+              block: lastBlock,
+              blockNumber: lastProcessedBlockNumber,
+              events,
+              log,
+              provider,
+            });
+            lastProcessedBlockHash = lastBlock.hash;
+            lastProcessedTimestamp = lastBlock.timestamp;
+          }
+          return;
+        }
+
+        // Process all blocks from lastProcessedBlockNumber + 1 to currentBlock.number
+        const fromBlock = lastProcessedBlockNumber + 1;
+        const toBlock = currentBlock.number;
+        const blocksToProcess = toBlock - fromBlock + 1;
+
+        log.info(
+          `Polling blocks ${fromBlock} to ${toBlock} (${blocksToProcess} blocks)`
+        );
+
+        // Fetch events for the entire range
+        const events = await pollContractForEvents(fromBlock, toBlock, this);
+
+        // Group events by block number
+        const eventsByBlock = events.reduce<
+          Record<number, ConditionalOrderCreatedEvent[]>
+        >((acc, event) => {
+          const blockNum = event.blockNumber;
+          if (!acc[blockNum]) {
+            acc[blockNum] = [];
+          }
+          acc[blockNum].push(event);
+          return acc;
+        }, {});
+
+        // Process blocks in order
+        for (
+          let blockNumber = fromBlock;
+          blockNumber <= toBlock;
+          blockNumber++
+        ) {
+          const block = await provider.getBlock(blockNumber);
+          const blockEvents = eventsByBlock[blockNumber] || [];
+
+          // Check for re-orgs: verify the previous block hash matches
+          if (blockNumber === fromBlock && blockNumber > this.deploymentBlock) {
+            // Check if the previous block hash matches what we have stored
+            if (block.parentHash !== lastProcessedBlockHash) {
+              metrics.reorgsTotal.labels(chainId.toString()).inc();
+              log.info(
+                `Re-org detected at block ${blockNumber}, previous block hash mismatch`
+              );
+              // Re-process the previous block
+              const previousBlock = await provider.getBlock(blockNumber - 1);
+              const previousEvents = await pollContractForEvents(
+                blockNumber - 1,
+                blockNumber - 1,
+                this
+              );
+              await processBlockAndPersist({
+                context: this,
+                block: previousBlock,
+                blockNumber: blockNumber - 1,
+                events: previousEvents,
+                log,
+                provider,
+              });
+            }
+          }
+
+          await processBlockAndPersist({
+            context: this,
+            block,
+            blockNumber,
+            events: blockEvents,
+            log,
+            provider,
+          });
+
+          lastProcessedBlockNumber = blockNumber;
+          lastProcessedBlockHash = block.hash;
+          lastProcessedTimestamp = block.timestamp;
+        }
+
+        log.debug(`Processed ${blocksToProcess} blocks`);
+      } catch (error) {
+        log.error(`Error polling for new blocks:`, error);
+      }
+    };
+
+    // Initial poll
+    await pollForNewBlocks();
+
+    // Set up interval polling
+    const intervalId = setInterval(async () => {
+      await pollForNewBlocks();
+    }, pollingIntervalSeconds! * 1000);
+
+    // Watchdog to check if we're still processing blocks
+    while (true) {
+      await asyncSleep(WATCHDOG_FREQUENCY_SECS * 1000);
+      const now = Math.floor(new Date().getTime() / 1000);
+      const timeElapsed = now - lastProcessedTimestamp;
+
+      log.debug(`Time since last block processed: ${timeElapsed}s`);
+
+      if (timeElapsed >= adjustedWatchdogTimeout) {
+        log.error(
+          `Chain watcher last processed a block ${timeElapsed}s ago (${adjustedWatchdogTimeout}s timeout configured for time-based polling). Check the RPC.`
+        );
+        if (isRunningInKubernetesPod()) {
+          this.sync = ChainSync.UNKNOWN;
+          continue;
+        }
+
+        clearInterval(intervalId);
         await registry.storage.close();
         process.exit(1);
       }

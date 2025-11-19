@@ -8,10 +8,26 @@ import { DBService, ApiService, ChainContext } from "../services";
  */
 export async function run(options: RunOptions) {
   const log = getLogger({ name: "commands:run" });
-  const { oneShot, disableApi, apiPort, databasePath, networks } = options;
+  const { oneShot, disableApi, apiPort, databasePath, networks, storage } =
+    options;
+
+  // Determine storage configuration
+  const storageType = storage?.type || "leveldb";
+  const redisConfig =
+    storage?.type === "redis" && storage.redis
+      ? {
+          host: storage.redis.host,
+          port: storage.redis.port,
+          password: storage.redis.password,
+        }
+      : undefined;
 
   // Open the database
-  const storage = DBService.getInstance(databasePath);
+  const dbService = DBService.getInstance(
+    databasePath,
+    storageType,
+    redisConfig
+  );
 
   // Start the API server if it's not disabled
   let api: ApiService | undefined;
@@ -42,7 +58,7 @@ export async function run(options: RunOptions) {
             ...options,
             ...network,
           },
-          storage
+          dbService
         );
       })
     );

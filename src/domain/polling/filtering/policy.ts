@@ -31,12 +31,20 @@ export class FilterPolicy {
   protected config: PolicyConfig | undefined;
 
   constructor(config: Config["networks"][number]["filterPolicy"]) {
+    const normalizeAddress = (value?: string) =>
+      value ? value.toLowerCase() : value;
+
     this.config = {
       defaultAction: FilterAction[config.defaultAction],
-      owners: this.convertToMap(config.owners),
-      handlers: this.convertToMap(config.handlers),
-      transactions: this.convertToMap(config.transactions),
-      conditionalOrderIds: this.convertToMap(config.conditionalOrderIds),
+      owners: this.convertToMap(config.owners, normalizeAddress),
+      handlers: this.convertToMap(config.handlers, normalizeAddress),
+      transactions: this.convertToMap(config.transactions, (value) =>
+        value ? value.toLowerCase() : value
+      ),
+      conditionalOrderIds: this.convertToMap(
+        config.conditionalOrderIds,
+        (value) => (value ? value.toLowerCase() : value)
+      ),
     };
   }
 
@@ -64,11 +72,16 @@ export class FilterPolicy {
     } = this.config;
 
     // Find the first matching rule
+    const normalizedProgrammaticOrderId = programmaticOrderId.toLowerCase();
+    const normalizedTransaction = transaction.toLowerCase();
+    const normalizedOwner = owner.toLowerCase();
+    const normalizedHandler = conditionalOrderParams.handler.toLowerCase();
+
     const action =
-      programmaticOrderIds.get(programmaticOrderId) ||
-      transactions.get(transaction) ||
-      owners.get(owner) ||
-      handlers.get(conditionalOrderParams.handler);
+      programmaticOrderIds.get(normalizedProgrammaticOrderId) ||
+      transactions.get(normalizedTransaction) ||
+      owners.get(normalizedOwner) ||
+      handlers.get(normalizedHandler);
 
     if (action) {
       return action;
@@ -77,13 +90,16 @@ export class FilterPolicy {
     return this.config.defaultAction;
   }
 
-  private convertToMap(object?: {
-    [k: string]: FilterActionSchema;
-  }): Map<string, FilterAction> {
+  private convertToMap(
+    object?: {
+      [k: string]: FilterActionSchema;
+    },
+    normalizer: (key?: string) => string | undefined = (key) => key
+  ): Map<string, FilterAction> {
     return object
       ? new Map(
           Object.entries(object).map(([key, value]) => [
-            key,
+            normalizer(key) ?? key,
             FilterAction[value],
           ])
         )
